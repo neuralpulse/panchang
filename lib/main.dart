@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:alarm/alarm.dart'; // <-- import alarm package
+import 'package:alarm/alarm.dart';
 import 'pages/home_page.dart';
 import 'services/panchang_service.dart';
 import 'app_theme.dart';
 
 void main() async {
-  WidgetsFlutterBinding.ensureInitialized(); // Required for async initialization
-  await Alarm.init(); // Initialize Alarm system before app starts
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize Alarm system
+  await Alarm.init();
+
   runApp(const MyApp());
 }
 

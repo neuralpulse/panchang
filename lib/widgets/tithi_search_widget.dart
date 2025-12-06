@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:alarm/alarm.dart';
 import '../services/panchang_service.dart';
+import '../services/transliteration_service.dart';
 import '../models/tithi_search_result.dart';
 import '../app_theme.dart';
 
@@ -10,6 +11,7 @@ class TithiSearchWidget extends StatefulWidget {
   final double? latitude;
   final double? longitude;
   final VoidCallback? onAlarmsUpdated;
+  final Function(int alarmId, String tithi)? onAlarmSet;
 
   const TithiSearchWidget({
     super.key,
@@ -17,6 +19,7 @@ class TithiSearchWidget extends StatefulWidget {
     this.latitude,
     this.longitude,
     this.onAlarmsUpdated,
+    this.onAlarmSet,
   });
 
   @override
@@ -29,6 +32,26 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
   List<String> _availableTithis = [];
   bool _isLoading = false;
   bool _isSearching = false;
+
+  // Tithi name variations mapping
+  final Map<String, List<String>> tithiVariations = {
+    'Padyami': ['Padyami', 'Pratipada', 'Pratipad'],
+    'Vidhiya': ['Vidhiya', 'Dwitiya', 'Dwiteeya', 'Vidiya'],
+    'Thadiya': ['Thadiya', 'Tritiya', 'Trutiya', 'Tadiya'],
+    'Chavithi': ['Chavithi', 'Chaviti', 'Chaturthi', 'Chaturti'],
+    'Panchami': ['Panchami', 'Panchami'],
+    'Shasti': ['Shasti', 'Shashthi', 'Sashti'],
+    'Sapthami': ['Sapthami', 'Saptami', 'Sapthmi'],
+    'Ashtami': ['Ashtami', 'Astami'],
+    'Navami': ['Navami', 'Navmi'],
+    'Dasami': ['Dasami', 'Dashami', 'Dasmi'],
+    'Ekadasi': ['Ekadasi', 'Ekadashi', 'Ekadshi'],
+    'Dvadasi': ['Dvadasi', 'Dwadashi', 'Dvadshi'],
+    'Trayodasi': ['Trayodasi', 'Trayodashi', 'Trayodshi'],
+    'Chaturdasi': ['Chaturdasi', 'Chaturdashi', 'Chaturdshi'],
+    'Punnami': ['Punnami', 'Purnima', 'Poornima'],
+    'Amavasya': ['Amavasya', 'Amavasye', 'Amawasya'],
+  };
 
   @override
   void initState() {
@@ -57,6 +80,43 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
     }
   }
 
+  // Find the actual tithi name from server that matches user input
+  String? _findMatchingTithi(String searchTerm) {
+    final lowerSearch = searchTerm.toLowerCase().trim();
+
+    // Direct match
+    for (final tithi in _availableTithis) {
+      if (tithi.toLowerCase() == lowerSearch) {
+        return tithi;
+      }
+    }
+
+    // Check variations
+    for (final entry in tithiVariations.entries) {
+      for (final variation in entry.value) {
+        if (variation.toLowerCase() == lowerSearch) {
+          // Find the actual tithi name in available tithis
+          for (final availableTithi in _availableTithis) {
+            if (entry.value.any(
+              (v) => availableTithi.toLowerCase().contains(v.toLowerCase()),
+            )) {
+              return availableTithi;
+            }
+          }
+        }
+      }
+    }
+
+    // Partial match
+    for (final tithi in _availableTithis) {
+      if (tithi.toLowerCase().contains(lowerSearch)) {
+        return tithi;
+      }
+    }
+
+    return null;
+  }
+
   Future<void> _searchTithi(String tithi) async {
     if (widget.latitude == null || widget.longitude == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -65,10 +125,20 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
       return;
     }
 
+    // Find the matching tithi from server
+    final matchingTithi = _findMatchingTithi(tithi);
+
+    if (matchingTithi == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Could not find tithi matching '$tithi'")),
+      );
+      return;
+    }
+
     try {
       setState(() => _isSearching = true);
       final result = await widget.service.searchTithiDates(
-        tithi,
+        matchingTithi,
         widget.latitude!,
         widget.longitude!,
       );
@@ -123,11 +193,21 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
           volume: 0.8,
           fadeDuration: 3.0,
           notificationTitle: 'Tithi Reminder',
-          notificationBody: '${_searchResult!.tithi} on ${tithiDate.date}',
+          notificationBody:
+              '${TransliterationService.toHindiTransliteration(_searchResult!.tithi)} on ${tithiDate.date}',
           enableNotificationOnKill: true,
         );
 
         await Alarm.set(alarmSettings: alarmSettings);
+
+        // Save tithi info
+        if (widget.onAlarmSet != null) {
+          widget.onAlarmSet!(
+            id,
+            TransliterationService.toHindiTransliteration(_searchResult!.tithi),
+          );
+        }
+
         successCount++;
       } catch (e) {
         print("Error setting alarm for ${tithiDate.date}: $e");
@@ -138,7 +218,7 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "Set $successCount alarms for ${_searchResult!.tithi} at ${pickedTime.format(context)}",
+            "Set $successCount alarms for ${TransliterationService.toHindiTransliteration(_searchResult!.tithi)} at ${pickedTime.format(context)}",
           ),
         ),
       );
@@ -146,6 +226,90 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
       // Notify HomePage to reload alarms
       if (widget.onAlarmsUpdated != null) {
         widget.onAlarmsUpdated!();
+      }
+    }
+  }
+
+  Future<void> _setAlarmForSpecificDate(TithiDate tithiDate) async {
+    final dateTime = tithiDate.dateTime;
+
+    // Check if date is in the past
+    if (dateTime.isBefore(DateTime.now().subtract(const Duration(days: 1)))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Cannot set alarm for past dates")),
+      );
+      return;
+    }
+
+    final pickedTime = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+
+    if (pickedTime == null) return;
+
+    try {
+      final alarmDateTime = DateTime(
+        dateTime.year,
+        dateTime.month,
+        dateTime.day,
+        pickedTime.hour,
+        pickedTime.minute,
+      );
+
+      // Double check alarm time is not in the past
+      if (alarmDateTime.isBefore(DateTime.now())) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Cannot set alarm for past time")),
+        );
+        return;
+      }
+
+      final id = dateTime.year * 10000 + dateTime.month * 100 + dateTime.day;
+
+      final alarmSettings = AlarmSettings(
+        id: id,
+        dateTime: alarmDateTime,
+        assetAudioPath: 'assets/alarm.mp3',
+        loopAudio: true,
+        vibrate: true,
+        volume: 0.8,
+        fadeDuration: 3.0,
+        notificationTitle: 'Tithi Reminder',
+        notificationBody:
+            '${TransliterationService.toHindiTransliteration(_searchResult!.tithi)} on ${tithiDate.date}',
+        enableNotificationOnKill: true,
+      );
+
+      await Alarm.set(alarmSettings: alarmSettings);
+
+      // Save tithi info
+      if (widget.onAlarmSet != null) {
+        widget.onAlarmSet!(
+          id,
+          TransliterationService.toHindiTransliteration(_searchResult!.tithi),
+        );
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "Alarm set for ${pickedTime.format(context)} on ${tithiDate.date}",
+            ),
+          ),
+        );
+
+        // Notify HomePage to reload alarms
+        if (widget.onAlarmsUpdated != null) {
+          widget.onAlarmsUpdated!();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error setting alarm: $e")));
       }
     }
   }
@@ -184,13 +348,18 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
                     focusNode: focusNode,
                     decoration: InputDecoration(
                       labelText: "Search for a Tithi",
-                      hintText: "e.g., Purnima, Amavasya, Ekadashi",
+                      hintText: "e.g., Purnima, Amavasya, Ekadashi, Chaturthi",
                       border: const OutlineInputBorder(),
                       suffixIcon: _isSearching
                           ? const SizedBox(
                               width: 20,
                               height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: Padding(
+                                padding: EdgeInsets.all(12.0),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
                             )
                           : IconButton(
                               icon: const Icon(Icons.search),
@@ -210,12 +379,24 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
                 },
                 suggestionsCallback: (pattern) {
                   if (pattern.isEmpty) return [];
-                  return _availableTithis
+
+                  // Create a set of all variations and available tithis
+                  Set<String> allSuggestions = {};
+
+                  // Add available tithis
+                  allSuggestions.addAll(_availableTithis);
+
+                  // Add variations
+                  for (final variations in tithiVariations.values) {
+                    allSuggestions.addAll(variations);
+                  }
+
+                  return allSuggestions
                       .where(
                         (tithi) =>
                             tithi.toLowerCase().contains(pattern.toLowerCase()),
                       )
-                      .take(5)
+                      .take(8)
                       .toList();
                 },
                 itemBuilder: (context, suggestion) {
@@ -239,16 +420,18 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    "Results for \"${_searchResult!.tithi}\"",
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: AppColors.pennRed,
+                  Flexible(
+                    child: Text(
+                      "Results for \"${TransliterationService.toHindiTransliteration(_searchResult!.tithi)}\"",
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        color: AppColors.pennRed,
+                      ),
                     ),
                   ),
                   Text(
-                    "${_searchResult!.totalMatches} dates found",
+                    "${_searchResult!.totalMatches} dates",
                     style: const TextStyle(color: Colors.grey, fontSize: 14),
                   ),
                 ],
@@ -283,7 +466,7 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
                 )
               else
                 Container(
-                  height: 200,
+                  height: 300,
                   decoration: BoxDecoration(
                     border: Border.all(color: Colors.grey.shade300),
                     borderRadius: BorderRadius.circular(8),
@@ -319,7 +502,7 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
                           ),
                         ),
                         subtitle: Text(
-                          "${tithiDate.paksha} • ${tithiDate.nakshatra}",
+                          "${TransliterationService.toHindiTransliteration(tithiDate.paksha)} • ${TransliterationService.toHindiTransliteration(tithiDate.nakshatra)}",
                           style: TextStyle(
                             fontSize: 12,
                             color: isPast ? Colors.grey : Colors.black54,
@@ -331,10 +514,15 @@ class _TithiSearchWidgetState extends State<TithiSearchWidget> {
                                 color: Colors.grey,
                                 size: 16,
                               )
-                            : const Icon(
-                                Icons.event,
-                                color: AppColors.pumpkin,
-                                size: 16,
+                            : IconButton(
+                                icon: const Icon(
+                                  Icons.alarm_add,
+                                  color: AppColors.pumpkin,
+                                  size: 20,
+                                ),
+                                onPressed: () =>
+                                    _setAlarmForSpecificDate(tithiDate),
+                                tooltip: 'Set alarm for this date',
                               ),
                       );
                     },

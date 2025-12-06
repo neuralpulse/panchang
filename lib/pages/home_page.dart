@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:alarm/alarm.dart';
 import '../models/panchang_day.dart';
 import '../services/panchang_service.dart';
+import '../services/transliteration_service.dart';
 import '../widgets/calendar_widget.dart';
 import '../widgets/date_details_widget.dart';
 import '../widgets/tithi_search_widget.dart';
@@ -22,9 +23,12 @@ class _HomePageState extends State<HomePage> {
   PanchangDay? selectedDay;
   bool isLoading = false;
   List<AlarmSettings> _alarms = [];
+  Map<int, String> _alarmTithiMap = {}; // Store tithi info for each alarm
 
   String? selectedCity;
   bool _isCachingYear = false;
+  final TextEditingController _cityController = TextEditingController();
+  final FocusNode _cityFocusNode = FocusNode();
 
   final List<String> months = const [
     "January",
@@ -116,24 +120,43 @@ class _HomePageState extends State<HomePage> {
     _initializeAlarms();
   }
 
+  @override
+  void dispose() {
+    _cityController.dispose();
+    _cityFocusNode.dispose();
+    super.dispose();
+  }
+
   Future<void> _initializeAlarms() async {
     _loadAlarms();
 
     Alarm.ringStream.stream.listen((alarmSettings) {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => AlarmRingPage(alarmId: alarmSettings.id),
-          fullscreenDialog: true,
-        ),
-      );
+      // Navigate to alarm ring page even when app is closed
+      if (mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AlarmRingPage(alarmId: alarmSettings.id),
+            fullscreenDialog: true,
+          ),
+        );
+      }
     });
   }
 
   void _loadAlarms() {
     setState(() {
-      _alarms = Alarm.getAlarms() ?? [];
+      _alarms = Alarm.getAlarms();
+      _alarms.sort((a, b) => a.dateTime.compareTo(b.dateTime));
     });
+  }
+
+  void _saveTithiForAlarm(int alarmId, String tithi) {
+    _alarmTithiMap[alarmId] = tithi;
+  }
+
+  String? _getTithiForAlarm(int alarmId) {
+    return _alarmTithiMap[alarmId];
   }
 
   Future<void> _fetchDayPanchang(DateTime date) async {
@@ -178,6 +201,14 @@ class _HomePageState extends State<HomePage> {
       time.minute,
     );
 
+    // Skip if alarm time is in the past
+    if (alarmDateTime.isBefore(DateTime.now())) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Cannot set alarm for past time")),
+      );
+      return;
+    }
+
     final id = day.year * 10000 + day.month * 100 + day.dayNum;
 
     final alarmSettings = AlarmSettings(
@@ -189,15 +220,16 @@ class _HomePageState extends State<HomePage> {
       volume: 0.8,
       fadeDuration: 3.0,
       notificationTitle: 'Panchang Alarm',
-      notificationBody: 'Reminder for ${day.dateKey} (${day.day})',
+      notificationBody: '${day.tithi ?? "Reminder"} on ${day.dateKey}',
       enableNotificationOnKill: true,
     );
 
     await Alarm.set(alarmSettings: alarmSettings);
 
-    setState(() {
-      _alarms.add(alarmSettings);
-    });
+    // Save tithi info for this alarm
+    _saveTithiForAlarm(id, day.tithi ?? "No Tithi");
+
+    _loadAlarms();
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -250,17 +282,26 @@ class _HomePageState extends State<HomePage> {
                   itemCount: _alarms.length,
                   itemBuilder: (context, index) {
                     final alarm = _alarms[index];
+                    final tithi = _getTithiForAlarm(alarm.id);
                     return ListTile(
                       title: Text(
                         "${alarm.dateTime.hour.toString().padLeft(2, '0')}:${alarm.dateTime.minute.toString().padLeft(2, '0')} on ${alarm.dateTime.day}-${alarm.dateTime.month}-${alarm.dateTime.year}",
                       ),
+                      subtitle: tithi != null
+                          ? Text(
+                              "Tithi: $tithi",
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.pumpkin,
+                              ),
+                            )
+                          : null,
                       trailing: IconButton(
                         icon: const Icon(Icons.delete, color: Colors.red),
                         onPressed: () async {
                           await Alarm.stop(alarm.id);
-                          setState(() {
-                            _alarms.removeAt(index);
-                          });
+                          _alarmTithiMap.remove(alarm.id);
+                          _loadAlarms();
                           Navigator.pop(context);
                           _showAlarmsDialog();
                         },
@@ -273,7 +314,6 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  // ===================== Tithi Search Bottom Sheet =====================
   void _showTithiSearchDialog() {
     if (selectedCity == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -298,7 +338,12 @@ class _HomePageState extends State<HomePage> {
             service: widget.service,
             latitude: cities[selectedCity]!['lat'],
             longitude: cities[selectedCity]!['lng'],
-            onAlarmsUpdated: _loadAlarms,
+            onAlarmsUpdated: () {
+              _loadAlarms();
+            },
+            onAlarmSet: (alarmId, tithi) {
+              _saveTithiForAlarm(alarmId, tithi);
+            },
           ),
         ),
       ),
@@ -371,6 +416,8 @@ class _HomePageState extends State<HomePage> {
                           selectedCity = city;
                           selectedDay = null;
                         });
+                        _cityController.text = city;
+                        _cityFocusNode.unfocus(); // Remove focus
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text("City set to $city. Select a date!"),
@@ -380,16 +427,41 @@ class _HomePageState extends State<HomePage> {
                       },
                       fieldViewBuilder:
                           (context, controller, focusNode, onEditingComplete) {
+                            _cityController.text = controller.text;
                             return TextField(
                               controller: controller,
                               focusNode: focusNode,
-                              decoration: const InputDecoration(
+                              decoration: InputDecoration(
                                 labelText: "Search City",
-                                border: OutlineInputBorder(),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: selectedCity != null
+                                    ? IconButton(
+                                        icon: const Icon(Icons.clear),
+                                        onPressed: () {
+                                          controller.clear();
+                                          setState(() {
+                                            selectedCity = null;
+                                            selectedDay = null;
+                                          });
+                                          focusNode.unfocus();
+                                        },
+                                      )
+                                    : null,
                               ),
                             );
                           },
                     ),
+                    if (selectedCity != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: Text(
+                          "Selected: $selectedCity",
+                          style: const TextStyle(
+                            color: AppColors.pumpkin,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -516,14 +588,28 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 12),
 
             // Calendar
-            CalendarWidget(
-              focusedMonth: currentMonth,
-              service: widget.service,
-              selectedDay: selectedDay,
-              onDateSelected: (day) {
-                _fetchDayPanchang(DateTime(day.year, day.month, day.dayNum));
-              },
-            ),
+            if (selectedCity != null)
+              CalendarWidget(
+                focusedMonth: currentMonth,
+                service: widget.service,
+                selectedDay: selectedDay,
+                latitude: cities[selectedCity]!['lat']!,
+                longitude: cities[selectedCity]!['lng']!,
+                onDateSelected: (day) {
+                  _fetchDayPanchang(DateTime(day.year, day.month, day.dayNum));
+                },
+              )
+            else
+              const Card(
+                elevation: 3,
+                child: Padding(
+                  padding: EdgeInsets.all(32.0),
+                  child: Text(
+                    "Please select a city to view calendar",
+                    style: TextStyle(color: Colors.grey, fontSize: 16),
+                  ),
+                ),
+              ),
 
             const SizedBox(height: 12),
 
@@ -540,25 +626,30 @@ class _HomePageState extends State<HomePage> {
                   padding: const EdgeInsets.all(12),
                   child: Column(
                     children: [
-                      DateDetailsWidget(day: selectedDay),
-                      const SizedBox(height: 16),
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.alarm),
-                        label: const Text("Set Alarm"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.pumpkin,
-                          foregroundColor: Colors.white,
+                      // Set Alarm button at top
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.alarm),
+                          label: const Text("Set Alarm for This Day"),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.pumpkin,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          onPressed: () async {
+                            final pickedTime = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.now(),
+                            );
+                            if (pickedTime != null) {
+                              await _setAlarmForDay(selectedDay!, pickedTime);
+                            }
+                          },
                         ),
-                        onPressed: () async {
-                          final pickedTime = await showTimePicker(
-                            context: context,
-                            initialTime: TimeOfDay.now(),
-                          );
-                          if (pickedTime != null) {
-                            await _setAlarmForDay(selectedDay!, pickedTime);
-                          }
-                        },
                       ),
+                      const SizedBox(height: 16),
+                      DateDetailsWidget(day: selectedDay),
                     ],
                   ),
                 ),
