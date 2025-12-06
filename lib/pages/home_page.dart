@@ -4,6 +4,7 @@ import '../models/panchang_day.dart';
 import '../services/panchang_service.dart';
 import '../widgets/calendar_widget.dart';
 import '../widgets/date_details_widget.dart';
+import '../widgets/tithi_search_widget.dart';
 import '../app_theme.dart';
 import 'alarm_ring_page.dart';
 
@@ -23,6 +24,7 @@ class _HomePageState extends State<HomePage> {
   List<AlarmSettings> _alarms = [];
 
   String? selectedCity;
+  bool _isCachingYear = false;
 
   final List<String> months = const [
     "January",
@@ -43,46 +45,7 @@ class _HomePageState extends State<HomePage> {
     "Agartala": {"lat": 23.8315, "lng": 91.2868},
     "Agra": {"lat": 27.1767, "lng": 78.0081},
     "Ahmedabad": {"lat": 23.0225, "lng": 72.5714},
-    "Aizawl": {"lat": 23.7271, "lng": 92.7176},
-    "Ajmer": {"lat": 26.4499, "lng": 74.6399},
-    "Allahabad": {"lat": 25.4358, "lng": 81.8463},
-    "Amritsar": {"lat": 31.6340, "lng": 74.8723},
-    "Asansol": {"lat": 23.6833, "lng": 86.9667},
-    "Aurangabad": {"lat": 19.8762, "lng": 75.3433},
-    "Ayodhya": {"lat": 26.7922, "lng": 82.1942},
     "Bangalore": {"lat": 12.9716, "lng": 77.5946},
-    "Bareilly": {"lat": 28.3670, "lng": 79.4304},
-    "Bengaluru": {"lat": 12.9716, "lng": 77.5946},
-    "Bhagalpur": {"lat": 25.2410, "lng": 86.9718},
-    "Bhavnagar": {"lat": 21.7645, "lng": 72.1519},
-    "Bhilai": {"lat": 21.1938, "lng": 81.3509},
-    "Bhubaneswar": {"lat": 20.2961, "lng": 85.8245},
-    "Bhopal": {"lat": 23.2599, "lng": 77.4126},
-    "Bikaner": {"lat": 28.0229, "lng": 73.3119},
-    "Bilaspur": {"lat": 22.0796, "lng": 82.1391},
-    "Chandigarh": {"lat": 30.7333, "lng": 76.7794},
-    "Chennai": {"lat": 13.0827, "lng": 80.2707},
-    "Coimbatore": {"lat": 11.0168, "lng": 76.9558},
-    "Cuttack": {"lat": 20.4625, "lng": 85.8828},
-    "Daman": {"lat": 20.4143, "lng": 72.8324},
-    "Dehradun": {"lat": 30.3165, "lng": 78.0322},
-    "Delhi": {"lat": 28.6139, "lng": 77.2090},
-    "Dhanbad": {"lat": 23.7957, "lng": 86.4304},
-    "Dibrugarh": {"lat": 27.4728, "lng": 94.9119},
-    "Dispur": {"lat": 26.1405, "lng": 91.7893},
-    "Durgapur": {"lat": 23.5204, "lng": 87.3119},
-    "Dwarka": {"lat": 22.2394, "lng": 68.9678},
-    "Faridabad": {"lat": 28.4089, "lng": 77.3178},
-    "Gandhinagar": {"lat": 23.2156, "lng": 72.6369},
-    "Gangtok": {"lat": 27.3389, "lng": 88.6065},
-    "Gaya": {"lat": 24.7914, "lng": 85.0002},
-    "Ghaziabad": {"lat": 28.6692, "lng": 77.4538},
-    "Gorakhpur": {"lat": 26.7606, "lng": 83.3732},
-    "Gulbarga": {"lat": 17.3297, "lng": 76.8343},
-    "Guntur": {"lat": 16.3067, "lng": 80.4365},
-    "Gurugram": {"lat": 28.4595, "lng": 77.0266},
-    "Guwahati": {"lat": 26.1445, "lng": 91.7362},
-    "Gwalior": {"lat": 26.2183, "lng": 78.1828},
     "Haldwani": {"lat": 29.2180, "lng": 79.5120},
     "Howrah": {"lat": 22.5958, "lng": 88.2636},
     "Hubli": {"lat": 15.3647, "lng": 75.1240},
@@ -245,6 +208,34 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Future<void> _cacheYearData() async {
+    if (selectedCity == null || _isCachingYear) return;
+
+    final coords = cities[selectedCity]!;
+
+    setState(() => _isCachingYear = true);
+
+    try {
+      await widget.service.cacheYearData(coords['lat']!, coords['lng']!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Started caching year data in background"),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Error caching data: $e")));
+      }
+    } finally {
+      setState(() => _isCachingYear = false);
+    }
+  }
+
   void _showAlarmsDialog() {
     showDialog(
       context: context,
@@ -282,6 +273,38 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // ===================== Tithi Search Bottom Sheet =====================
+  void _showTithiSearchDialog() {
+    if (selectedCity == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a city first")),
+      );
+      return;
+    }
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        height: MediaQuery.of(context).size.height * 0.95,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(25)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: TithiSearchWidget(
+            service: widget.service,
+            latitude: cities[selectedCity]!['lat'],
+            longitude: cities[selectedCity]!['lng'],
+            onAlarmsUpdated: _loadAlarms,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -295,14 +318,19 @@ class _HomePageState extends State<HomePage> {
             fontWeight: FontWeight.bold,
           ),
         ),
+        centerTitle: true,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.search),
+            color: AppColors.bgLight,
+            onPressed: _showTithiSearchDialog,
+          ),
           IconButton(
             icon: const Icon(Icons.alarm),
             onPressed: _showAlarmsDialog,
             color: AppColors.bgLight,
           ),
         ],
-        centerTitle: true,
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(12),
@@ -348,6 +376,7 @@ class _HomePageState extends State<HomePage> {
                             content: Text("City set to $city. Select a date!"),
                           ),
                         );
+                        _cacheYearData();
                       },
                       fieldViewBuilder:
                           (context, controller, focusNode, onEditingComplete) {
@@ -392,7 +421,6 @@ class _HomePageState extends State<HomePage> {
                       },
                     ),
                     const SizedBox(width: 8),
-                    // Month Dropdown
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
@@ -430,7 +458,6 @@ class _HomePageState extends State<HomePage> {
                       ),
                     ),
                     const SizedBox(width: 16),
-                    // Year Dropdown
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 8,
